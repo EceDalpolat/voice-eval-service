@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DJANGO_DEBUG: "true"          # also serves admin CSS for the demo
+      DJANGO_ALLOWED_HOSTS: "*"
+    volumes:
+      - ./data:/app/data            # keeps the SQLite database between restarts
+      - ./config:/app/config        # edit rules.yaml without rebuilding
