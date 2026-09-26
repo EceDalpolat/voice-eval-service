@@ -1,0 +1,249 @@
+# =============================================================================
+# Voice quality evaluation rules
+# -----------------------------------------------------------------------------
+# Every threshold, penalty, language lexicon and recovery policy lives here.
+# The Python code only knows HOW to run a check; this file decides WHEN a
+# check fails and WHAT happens next.
+#
+# Resolution order for one request (later wins):
+#   1. defaults below
+#   2. languages.<lang>.overrides
+#   3. providers.stt.<stt_provider>  (merged into the `stt` section)
+#   4. providers.tts.<tts_provider>  (merged into the `tts` section)
+#
+# Every check has:
+#   enabled   - turn the check on/off without code changes
+#   severity  - critical: fails the component on its own
+#               warning : only lowers the score
+#   penalty   - subtracted from the component score (starts at 1.0) on failure
+# =============================================================================
+version: "2026-01"
+
+scoring:
+  # Weights for the overall quality score. Components that were not
+  # evaluated (e.g. no audio sent) are dropped and weights re-normalised.
+  component_weights:
+    audio: 0.3
+    stt: 0.4
+    tts: 0.3
+  # A component also counts as failed if its score drops below this,
+  # even when only warnings fired (several small problems add up).
+  component_fail_below: 0.5
+
+# --- Input (caller) audio -----------------------------------------------------
+audio:
+  frame_ms: 20              # analysis window
+  silence_frame_dbfs: -45   # a frame quieter than this is "silence"
+  checks:
+    unreadable:
+      enabled: true
+      severity: critical
+      penalty: 1.0
+    too_short:
+      enabled: true
+      severity: critical
+      penalty: 1.0
+      min_duration_ms: 300
+    too_quiet:
+      enabled: true
+      severity: critical
+      penalty: 0.7
+      min_rms_dbfs: -40
+    mostly_silent:
+      enabled: true
+      severity: critical
+      penalty: 0.7
+      max_silence_ratio: 0.85
+    clipping:
+      enabled: true
+      severity: critical
+      penalty: 0.6
+      clip_level: 0.99
+      max_clipping_ratio: 0.01
+    low_snr:
+      enabled: true
+      severity: warning
+      penalty: 0.3
+      min_snr_db: 15
+
+# --- Speech-to-text result -----------------------------------------------------
+stt:
+  checks:
+    empty_transcript:
+      enabled: true
+      severity: critical
+      penalty: 1.0
+    low_confidence:
+      enabled: true
+      severity: critical
+      penalty: 0.6
+      min_confidence: 0.6
+    filler_only:
+      enabled: true
+      severity: critical
+      penalty: 0.7
+    garbage_characters:
+      enabled: true
+      severity: critical
+      penalty: 0.6
+      max_ratio: 0.3
+    repeated_tokens:          # typical STT hallucination: "tamam tamam tamam tamam"
+      enabled: true
+      severity: warning
+      penalty: 0.3
+      min_tokens: 4
+      max_repeat_ratio: 0.5
+    speech_rate:              # long audio but almost no words -> STT dropped speech
+      enabled: true
+      severity: warning
+      penalty: 0.3
+      min_audio_ms: 1500
+      min_words_per_second: 0.4
+    high_latency:
+      enabled: true
+      severity: warning
+      penalty: 0.2
+      max_latency_ms: 1500
+
+# --- Text-to-speech output -----------------------------------------------------
+tts:
+  checks:
+    empty_text:
+      enabled: true
+      severity: critical
+      penalty: 1.0
+    empty_audio:
+      enabled: true
+      severity: critical
+      penalty: 1.0
+    duration_anomaly:         # audio far shorter/longer than the text implies
+      enabled: true
+      severity: critical
+      penalty: 0.6
+      min_ratio: 0.4
+      max_ratio: 2.5
+    high_latency:
+      enabled: true
+      severity: warning
+      penalty: 0.3
+      max_latency_ms: 1500
+    very_high_latency:        # the caller hears dead air
+      enabled: true
+      severity: critical
+      penalty: 0.6
+      max_latency_ms: 4000
+  # When TTS audio bytes are sent, these audio checks are re-used on it.
+  audio_checks: [too_quiet, mostly_silent, clipping]
+
+# --- Language specific data -----------------------------------------------------
+languages:
+  tr:
+    lexicon:
+      filler_words: ["ııı", "ıı", "ı", "eee", "ee", "hmm", "hım", "ımm", "şey", "aaa", "ha"]
+      alphabet: "abcçdefgğhıijklmnoöprsştuüvyzqwx"
+      tts_chars_per_second: 13
+    overrides: {}
+  en:
+    lexicon:
+      filler_words: ["uh", "um", "umm", "hmm", "er", "erm", "ah", "eh"]
+      alphabet: "abcdefghijklmnopqrstuvwxyz"
+      tts_chars_per_second: 15
+    overrides:
+      stt:
+        checks:
+          low_confidence:
+            min_confidence: 0.65
+
+# Used when the request language is not configured above.
+default_language: en
+
+# --- Provider specific (adaptive) thresholds ------------------------------------
+# Example values. Providers report confidence and latency on different
+# scales, so each one can get its own thresholds without touching code.
+providers:
+  stt:
+    fast_stt_example:
+      checks:
+        high_latency:
+          max_latency_ms: 800
+    lenient_confidence_example:
+      checks:
+        low_confidence:
+          min_confidence: 0.45
+  tts:
+    slow_tts_example:
+      checks:
+        high_latency:
+          max_latency_ms: 2500
+
+# --- Recovery policy --------------------------------------------------------------
+# Evaluated top to bottom; the FIRST matching rule wins. Order encodes
+# priority. All keys inside `when` must hold (AND).
+#
+# Supported conditions:
+#   prior_failures_gte: N         non-accepted turns earlier in the same call
+#   component_failed:  X | [X,Y]  any of the listed components failed
+#   any_failed:        [rule,...]  any of the listed findings failed
+#   attempt_gte:       {stt: N}    attempt counter sent by the caller
+policy:
+  default_action: accept
+  rules:
+    - name: repeated_failures_in_call
+      description: "The call already had too many recovered turns; stop retrying and hand over safely."
+      action: safe_fallback
+      when:
+        prior_failures_gte: 3
+
+    - name: unusable_caller_audio
+      description: "The caller's audio is unusable, so re-running STT cannot help; ask the caller to repeat."
+      action: ask_repeat
+      when:
+        component_failed: audio
+
+    - name: caller_said_nothing_meaningful
+      description: "The transcript contains only filler words; the caller should be asked to repeat."
+      action: ask_repeat
+      when:
+        any_failed: [stt.filler_only]
+
+    - name: stt_retries_exhausted
+      description: "STT kept failing even after switching provider; ask the caller to repeat."
+      action: ask_repeat
+      when:
+        component_failed: stt
+        attempt_gte: {stt: 3}
+
+    - name: stt_provider_unreliable
+      description: "STT failed again while the input audio is fine; switch to another STT provider."
+      action: switch_provider
+      target: stt
+      when:
+        component_failed: stt
+        attempt_gte: {stt: 2}
+
+    - name: stt_failed
+      description: "The input audio is not the problem, but the transcript is not reliable; re-run STT."
+      action: retry_stt
+      when:
+        component_failed: stt
+
+    - name: tts_retries_exhausted
+      description: "TTS kept failing, even after switching provider; use the safe fallback response."
+      action: safe_fallback
+      when:
+        component_failed: tts
+        attempt_gte: {tts: 3}
+
+    - name: tts_provider_unreliable
+      description: "TTS failed again; switch to another TTS provider."
+      action: switch_provider
+      target: tts
+      when:
+        component_failed: tts
+        attempt_gte: {tts: 2}
+
+    - name: tts_failed
+      description: "The generated speech is not acceptable; regenerate it."
+      action: retry_tts
+      when:
+        component_failed: tts
