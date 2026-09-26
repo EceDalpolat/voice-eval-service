@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Quality Report</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e4e4df;
+          --ok:#2f7d4f; --warn:#b7791f; --bad:#b83b3b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:28px 0 10px; }
+  .muted { color:var(--muted); }
+  form { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }
+  input, select, button { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { background:var(--ink); color:#fff; border-color:var(--ink); cursor:pointer; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card b { display:block; font-size:24px; }
+  .scroll { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { font-weight:600; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+  .tag { padding:2px 8px; border-radius:99px; font-size:12px; background:#eee; }
+  .accept { background:#e3f1e8; color:var(--ok); }
+  .retry_stt, .retry_tts, .switch_provider { background:#f8eedb; color:var(--warn); }
+  .ask_repeat, .safe_fallback { background:#f6e1e1; color:var(--bad); }
+  .error { background:#f6e1e1; color:var(--bad); padding:10px; border-radius:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice Quality Report</h1>
+  <div class="muted">Same filters as <code>/api/evaluations/stats/</code>. Full detail in <a href="/admin/">admin</a> and <a href="/api/docs/">API docs</a>.</div>
+
+  <form method="get">
+    <input name="bot_id" placeholder="bot_id" value="{{ filters.bot_id|default:'' }}">
+    <input name="call_id" placeholder="call_id" value="{{ filters.call_id|default:'' }}">
+    <input name="provider" placeholder="provider" value="{{ filters.provider|default:'' }}">
+    <select name="action">
+      <option value="">any action</option>
+      {% for a in actions %}<option value="{{ a }}" {% if filters.action == a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+    </select>
+    <input type="date" name="date_from" value="{{ filters.date_from|default:'' }}">
+    <input type="date" name="date_to" value="{{ filters.date_to|default:'' }}">
+    <button type="submit">Filter</button>
+  </form>
+  {% if error %}<p class="error">Invalid filter: {{ error }}</p>{% endif %}
+
+  <div class="cards">
+    <div class="card"><span class="muted">Evaluations</span><b>{{ stats.total_evaluations }}</b></div>
+    <div class="card"><span class="muted">Avg quality</span><b>{{ stats.avg_quality_score|default:"–" }}</b></div>
+    <div class="card"><span class="muted">Failure rate</span><b>{% widthratio stats.failure_rate 1 100 %}%</b></div>
+    <div class="card"><span class="muted">Retry rate</span><b>{% widthratio stats.retry_rate 1 100 %}%</b></div>
+  </div>
+
+  <h2>Actions</h2>
+  <div class="scroll"><table>
+    <tr><th>Action</th><th>Count</th></tr>
+    {% for a in stats.actions %}<tr><td><span class="tag {{ a.action }}">{{ a.action }}</span></td><td>{{ a.count }}</td></tr>
+    {% empty %}<tr><td colspan="2" class="muted">No data</td></tr>{% endfor %}
+  </table></div>
+
+  <h2>Providers</h2>
+  <div class="scroll"><table>
+    <tr><th>Type</th><th>Provider</th><th>Evaluations</th><th>Avg latency (ms)</th><th>Max latency (ms)</th><th>Avg score</th><th>Failure rate</th></tr>
+    {% for p in stats.stt_providers %}<tr><td>STT</td><td>{{ p.provider }}</td><td>{{ p.evaluations }}</td><td>{{ p.avg_latency_ms|default:"–" }}</td><td>{{ p.max_latency_ms|default:"–" }}</td><td>{{ p.avg_score|default:"–" }}</td><td>{% widthratio p.failure_rate 1 100 %}%</td></tr>{% endfor %}
+    {% for p in stats.tts_providers %}<tr><td>TTS</td><td>{{ p.provider }}</td><td>{{ p.evaluations }}</td><td>{{ p.avg_latency_ms|default:"–" }}</td><td>{{ p.max_latency_ms|default:"–" }}</td><td>{{ p.avg_score|default:"–" }}</td><td>{% widthratio p.failure_rate 1 100 %}%</td></tr>{% endfor %}
+  </table></div>
+
+  <h2>Recent evaluations</h2>
+  <div class="scroll"><table>
+    <tr><th>Time (UTC)</th><th>Call</th><th>Bot</th><th>Lang</th><th>Score</th><th>Action</th><th>Policy</th></tr>
+    {% for e in recent %}<tr>
+      <td>{{ e.created_at|date:"Y-m-d H:i:s" }}</td><td>{{ e.call_id }}</td><td>{{ e.bot_id }}</td><td>{{ e.language }}</td>
+      <td>{{ e.quality_score|default:"–" }}</td>
+      <td><span class="tag {{ e.action }}">{{ e.action }}{% if e.action_target %} ({{ e.action_target }}){% endif %}</span></td>
+      <td><a href="/api/evaluations/{{ e.id }}/">{{ e.policy_name }}</a></td>
+    </tr>{% empty %}<tr><td colspan="7" class="muted">No evaluations yet</td></tr>{% endfor %}
+  </table></div>
+</main>
+</body>
+</html>
