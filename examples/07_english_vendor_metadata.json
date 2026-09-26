@@ -1,0 +1,22 @@
+{
+  "call_id": "demo-vendor",
+  "bot_id": "support-bot",
+  "turn_id": "turn-1",
+  "language": "en",
+  "stt": {
+    "provider": "demo_stt",
+    "transcript": "where is my order",
+    "confidence": 0.93,
+    "latency_ms": 420,
+    "attempt": 1
+  },
+  "tts": {
+    "provider": "seconds_vendor_example",
+    "text": "Your order arrives tomorrow.",
+    "attempt": 1,
+    "provider_metadata": {
+      "audio_length_seconds": 1.9,
+      "time_to_first_byte_ms": 380
+    }
+  }
+}

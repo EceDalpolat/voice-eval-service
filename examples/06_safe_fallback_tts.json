@@ -1,0 +1,20 @@
+{
+  "call_id": "demo-fallback",
+  "bot_id": "support-bot",
+  "turn_id": "turn-1",
+  "language": "tr",
+  "stt": {
+    "provider": "demo_stt",
+    "transcript": "siparişim nerede acaba",
+    "confidence": 0.93,
+    "latency_ms": 420,
+    "attempt": 1
+  },
+  "tts": {
+    "provider": "demo_tts",
+    "text": "Siparişiniz yarın teslim edilecek.",
+    "duration_ms": 0,
+    "latency_ms": 650,
+    "attempt": 3
+  }
+}
